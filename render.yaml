@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: oriondeck-backend
+    runtime: node
+    plan: starter
+    buildCommand: npm ci
+    startCommand: node backend/server.js
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: OPENAI_API_KEY
+        sync: false
+
+  - type: static
+    name: oriondeck-frontend
+    rootDir: frontend
+    buildCommand: npm ci --include=dev && npm run build
+    staticPublishPath: dist
+    envVars:
+      - key: VITE_API_BASE_URL
+        sync: false
+
