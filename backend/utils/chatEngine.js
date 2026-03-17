@@ -115,9 +115,10 @@ OR for adding a note:
   }
 }
 
-IMPORTANT:
+-IMPORTANT:
 - thinking steps should be SHORT (5-12 words each), like internal monologue.
-- message should be well-formatted markdown with bold headers, bullet points, and tables where appropriate. It should read like a conversational but expert human explaining the portfolio to a CIO or investment committee.
+- message should be concise and well-structured markdown: 2–6 short paragraphs and/or a few bullet points. Avoid long walls of text or repeated whitespace.
+- Focus on the specific question the user asked (e.g., \"Explain slide 4\"), not every possible metric at once.
 - Never hallucinate numbers — only use what is in the slide data and portfolio data above, which already embed the full Excel and walkthrough logic. If the user asks for something that is not directly derivable, say so and offer the closest reliable proxy or explain what additional data would be needed.
 - For modifications: always include the modification object even if you mention it in the message.`;
 }
