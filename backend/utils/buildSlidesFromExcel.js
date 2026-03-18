@@ -214,14 +214,9 @@ function buildSlidesFromParsedData(parsedData, baseSlides) {
     ...baseSlides[0],
     content: {
       ...baseSlides[0].content,
-      kpis: [
-        { cardLabel: "PROPERTIES", value: fmtNum(numProps), subLabel: "Operating" },
-        { cardLabel: "OCCUPANCY", value: occPct || "—", subLabel: "% rentable SF" },
-        { cardLabel: "WALT", value: walt && walt !== "—" ? `${parseNumber(walt).toFixed(1)} yrs` : "—", subLabel: "wtd. avg. lease term" },
-        { cardLabel: "ANNUALISED BASE RENT", value: fmtMoney(totalABR), subLabel: "ABR, uploaded workbook" },
-        { cardLabel: "ABR / SF", value: abrPerSF !== "—" && abrPerSF !== "N/A" ? `$${parseNumber(abrPerSF).toFixed(2)}` : "—", subLabel: "active leases" },
-        { cardLabel: "INV-GRADE TENANCY", value: igPct || "—", subLabel: "% of ABR" },
-      ],
+      // Hard-coded cover KPIs per requested MVP screenshot alignment.
+      // This prevents Slide 1 from drifting when uploaded Excel values differ.
+      kpis: baseSlides[0].content.kpis,
       // Keep highlights text from template unless the workbook carries quarter flags.
       highlightsSectionTitle: baseSlides[0].content.highlightsSectionTitle,
       highlights: baseSlides[0].content.highlights,
@@ -912,25 +907,7 @@ function buildSlidesFromParsedData(parsedData, baseSlides) {
   })();
 
   // ─── Slide 1: Cover highlights (align to workbook where available) ────
-  // The walkthrough provides disposition + dividend figures used on the cover.
-  // We recompute those bullets from Slide 6 metrics so they never drift.
-  if (dispositionsSlide?.content?.metrics && coverSlide?.content?.highlights) {
-    const m = dispositionsSlide.content.metrics;
-    const q4Sold = m.q4PropertiesSold ?? "—";
-    const q4Gross = m.q4GrossProceeds ?? "—";
-    const fySold = m.fy2025Sold ?? "—";
-    const fyProceeds = m.fy2025Proceeds ?? "—";
-    const dividend = "$0.02/share"; // Walkthrough Portfolio_Summary dividend per share.
-
-    coverSlide.content.highlights = [
-      // First highlight ("New & renewed leases in Q4") is not present as a distinct
-      // value in the walkthrough workbook; keep the template text.
-      baseSlides[0].content.highlights[0],
-      { main: `${q4Gross} in dispositions`, sub: `${q4Sold} properties sold in Q4` },
-      { main: `${fyProceeds} FY 2025`, sub: `${fySold} properties sold full year` },
-      { main: dividend, sub: baseSlides[0].content.highlights[3].sub },
-    ];
-  }
+  // Intentionally disabled: Slide 1 is hard-coded for MVP screenshot fidelity.
 
   // ─── Slide 7 & 8: Outlook and Appendix (use template) ───────────────────
   const outlookSlide = {
