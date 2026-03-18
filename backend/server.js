@@ -6,6 +6,7 @@ const cors = require("cors");
 const uploadRouter = require("./routes/upload");
 const reportRouter = require("./routes/report");
 const chatRouter = require("./routes/chat");
+const { loadWalkthroughWorkbook } = require("./utils/walkthrough");
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -13,6 +14,13 @@ const PORT = process.env.PORT || 3001;
 app.use(cors({ origin: "*" }));
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ extended: true, limit: "50mb" }));
+
+// Load the quarterly walkthrough workbook once at startup (read-only reference model)
+try {
+  loadWalkthroughWorkbook(path.join(__dirname, "Quarterly_Presentation_Walkthrough.xlsx"));
+} catch (e) {
+  console.warn("Walkthrough workbook load warning:", e.message);
+}
 
 // Routes
 app.use("/upload", uploadRouter);

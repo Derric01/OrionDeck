@@ -2,6 +2,7 @@ const express = require("express");
 const path = require("path");
 const fs = require("fs");
 const { getSlides } = require("../utils/slideContent");
+const { getPortfolioContext } = require("../utils/chatEngine");
 
 const router = express.Router();
 const TEMPLATE_PATH = path.join(__dirname, "..", "Orion_Q4_2025_Portfolio_Report.pptx");
@@ -10,17 +11,32 @@ const TEMPLATE_PATH = path.join(__dirname, "..", "Orion_Q4_2025_Portfolio_Report
 router.post("/generate-report", (req, res) => {
   try {
     const slides = getSlides();
+    const ctx = getPortfolioContext();
+    if (!ctx || !ctx.summary) {
+      return res.status(400).json({
+        success: false,
+        error: "No uploaded Excel is loaded. Please upload Orion_Q4_2025_Raw_Data.xlsx first.",
+        thinking: ["Missing parsed workbook in session", "Awaiting Excel upload"],
+      });
+    }
+    const s = ctx?.summary || {};
+    const occ = s.occupancyPct || "—";
+    const abr = s.totalABR != null ? `$${(Number(s.totalABR) / 1e6).toFixed(1)}M` : "—";
+    const walt = s.waltYears != null ? `${Number(s.waltYears).toFixed(2)} yrs` : "—";
+    const props = s.operatingProperties ?? ctx?.properties?.length ?? "—";
+    const leases = s.totalLeases ?? ctx?.leases?.length ?? "—";
+    const txs = s.totalTransactions ?? ctx?.transactions?.length ?? "—";
     return res.json({
       success: true,
       message: "Your Q4 2025 Orion Portfolio Report has been generated.",
       thinking: [
-        "Loading parsed Excel data from session",
-        "Computing portfolio KPIs",
-        "Mapping asset type breakdown",
-        "Building occupancy analysis",
-        "Preparing transaction activity table",
-        "Compiling top tenant roster",
-        "Generating lease expiry schedule",
+        `Loading parsed workbook from session (${props} properties, ${leases} leases, ${txs} transactions)`,
+        `KPIs ready: Occupancy ${occ} | ABR ${abr} | WALT ${walt}`,
+        "Building slide 1 KPI cards from lease roll",
+        "Compiling top tenant roster from ABR weighting",
+        "Mapping asset type / industry / geography breakdowns",
+        "Computing lease expiry schedule from lease end dates",
+        "Building dispositions table from Transactions sheet",
         "Report complete — 8 slides ready",
       ],
       report_data: {

@@ -73,7 +73,22 @@ export default function App() {
     setIsThinking(true);
 
     try {
-      const res = await sendChat(text);
+      // Build multi-turn memory from the last few user/assistant messages.
+      // We exclude typing placeholders and cap length to control token burn.
+      const history = messages
+        .filter((m) => (m.role === "user" || m.role === "agent") && !m.isTyping && typeof m.content === "string" && m.content.trim())
+        .map((m) => ({ role: m.role === "agent" ? "assistant" : "user", content: m.content }))
+        .slice(-12);
+
+      // If the current user message wasn't in the state yet, append it.
+      if (history.length === 0 || !(history[history.length - 1].role === "user" && history[history.length - 1].content === text)) {
+        history.push({ role: "user", content: text });
+      }
+
+      // Remove current message from history; chatEngine will append it again as the new user prompt.
+      const historyWithoutCurrent = history.slice(0, -1);
+
+      const res = await sendChat(text, historyWithoutCurrent);
 
       const thinkSteps = (res.thinking || []).map((label, i) => ({
         step: i + 1,
@@ -126,7 +141,7 @@ export default function App() {
 
       replaceTyping(
         typingId,
-        `Excel file **${uploadRes.filename}** received and parsed.\n\nProcessing ${uploadRes.parsedSummary?.totalLeases || "89+"} lease records across ${uploadRes.parsedSummary?.operatingProperties || "61"} properties...\n\nGenerating presentation...`,
+        `Excel file **${uploadRes.filename}** received and parsed.\n\nProcessing ${uploadRes.parsedSummary?.totalLeases ?? "—"} lease records across ${uploadRes.parsedSummary?.operatingProperties ?? "—"} properties...\n\nGenerating presentation...`,
         { thinking: uploadRes.thinking?.map((s) => s.label) }
       );
 

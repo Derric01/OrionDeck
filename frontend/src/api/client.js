@@ -22,8 +22,8 @@ export async function generateReport() {
   return res.data;
 }
 
-export async function sendChat(message) {
-  const res = await api.post("/chat", { message });
+export async function sendChat(message, history = []) {
+  const res = await api.post("/chat", { message, history });
   return res.data;
 }
 

@@ -23,13 +23,38 @@ function parsePortfolioExcel(filePath) {
     const rows = xlsx.utils.sheet_to_json(ws, { header: 1, defval: "" });
     // Header row is row index 3 (0-indexed)
     const headers = rows[3];
-    if (headers) {
-      result.properties = rows.slice(4).filter(r => r[0]).map(row => {
-        const obj = {};
-        headers.forEach((h, i) => { if (h) obj[h] = row[i]; });
-        return obj;
-      });
+    const requiredProps = [
+      "Property ID",
+      "Property Name",
+      "Address",
+      "City",
+      "State",
+      "Asset Type",
+      "Status",
+      "Year Built",
+      "Year Renovated",
+      "Rentable SF",
+      "# Buildings",
+      "# Floors",
+      "Parking Spaces",
+      "Construction Type",
+      "Zoning",
+      "Acquisition Date",
+      "Acquisition Price",
+      "Book Value",
+    ];
+    if (!headers || !requiredProps.every((h) => headers.includes(h))) {
+      throw new Error(
+        "Invalid Properties sheet structure. Please use the Orion_Q4_2025_Raw_Data.xlsx template (missing or renamed columns in 'Properties')."
+      );
     }
+    result.properties = rows.slice(4).filter((r) => r[0]).map((row) => {
+      const obj = {};
+      headers.forEach((h, i) => {
+        if (h) obj[h] = row[i];
+      });
+      return obj;
+    });
   }
 
   // Parse Leases sheet
@@ -37,13 +62,38 @@ function parsePortfolioExcel(filePath) {
     const ws = wb.Sheets["Leases"];
     const rows = xlsx.utils.sheet_to_json(ws, { header: 1, defval: "" });
     const headers = rows[3];
-    if (headers) {
-      result.leases = rows.slice(4).filter(r => r[0]).map(row => {
-        const obj = {};
-        headers.forEach((h, i) => { if (h) obj[h] = row[i]; });
-        return obj;
-      });
+    const requiredLeases = [
+      "Lease ID",
+      "Property ID",
+      "Property Name",
+      "City",
+      "State",
+      "Asset Type",
+      "Tenant Name",
+      "Credit Rating",
+      "Inv. Grade?",
+      "Leased SF",
+      "Annual Base Rent",
+      "Rent / SF",
+      "Lease Type",
+      "Commencement",
+      "Expiration",
+      "Remaining Term (yrs)",
+      "Annual Escalation",
+      "Renewal Options",
+    ];
+    if (!headers || !requiredLeases.every((h) => headers.includes(h))) {
+      throw new Error(
+        "Invalid Leases sheet structure. Please use the Orion_Q4_2025_Raw_Data.xlsx template (missing or renamed columns in 'Leases')."
+      );
     }
+    result.leases = rows.slice(4).filter((r) => r[0]).map((row) => {
+      const obj = {};
+      headers.forEach((h, i) => {
+        if (h) obj[h] = row[i];
+      });
+      return obj;
+    });
   }
 
   // Parse Transactions sheet
@@ -51,13 +101,38 @@ function parsePortfolioExcel(filePath) {
     const ws = wb.Sheets["Transactions"];
     const rows = xlsx.utils.sheet_to_json(ws, { header: 1, defval: "" });
     const headers = rows[3];
-    if (headers) {
-      result.transactions = rows.slice(4).filter(r => r[0] && r[0] !== "Q4 2025 TOTAL — 3 Dispositions").map(row => {
+    const requiredTx = [
+      "Transaction ID",
+      "Property Name",
+      "City",
+      "State",
+      "Asset Type",
+      "Type",
+      "Transaction Date",
+      "Quarter",
+      "Rentable SF",
+      "Gross Price",
+      "Net Proceeds",
+      "Book Value",
+      "Gain / (Loss)",
+      "Occ % at Sale",
+      "Notes",
+    ];
+    if (!headers || !requiredTx.every((h) => headers.includes(h))) {
+      throw new Error(
+        "Invalid Transactions sheet structure. Please use the Orion_Q4_2025_Raw_Data.xlsx template (missing or renamed columns in 'Transactions')."
+      );
+    }
+    result.transactions = rows
+      .slice(4)
+      .filter((r) => r[0] && r[0] !== "Q4 2025 TOTAL — 3 Dispositions")
+      .map((row) => {
         const obj = {};
-        headers.forEach((h, i) => { if (h) obj[h] = row[i]; });
+        headers.forEach((h, i) => {
+          if (h) obj[h] = row[i];
+        });
         return obj;
       });
-    }
   }
 
   // Derive key metrics from parsed data
@@ -95,8 +170,8 @@ function deriveMetrics(data) {
   // WALT: weighted average lease term (years). Use "Remaining Term (Yrs)" or "Expiry Date"
   let waltYears = null;
   const abrCol = "Annual Base Rent";
-  const termCol = Object.keys(leases[0] || {}).find(k => /remaining|term|years/i.test(k));
-  const expiryCol = Object.keys(leases[0] || {}).find(k => /expir|end|date/i.test(k));
+  const termCol = "Remaining Term (yrs)";
+  const expiryCol = "Expiration";
   if (leases.length && totalABR > 0) {
     let weightedSum = 0;
     for (const l of leases) {

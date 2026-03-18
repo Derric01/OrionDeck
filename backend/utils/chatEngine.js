@@ -1,5 +1,6 @@
 const OpenAI = require("openai");
 const { getSlides, updateSlide, addNote } = require("./slideContent");
+const { getWalkthroughContext } = require("./walkthrough");
 
 let openai = null;
 function getOpenAIClient() {
@@ -25,6 +26,37 @@ function getPortfolioContext() {
 // ─── System prompt for non-streaming completion ──────────────────────────────
 
 function buildSystemPrompt(slides, portfolioContext) {
+  const walkthrough = getWalkthroughContext();
+  const walkthroughBlock = walkthrough
+    ? (() => {
+        // Keep this compact to control token burn while still grounding the model.
+        const cap = (grid, maxRows = 60) => (Array.isArray(grid) ? grid.slice(0, maxRows) : null);
+        const pick = (name) => cap(walkthrough.sheets?.[name]);
+        const summary = pick("Portfolio_Summary");
+        const topTenants = pick("STEP5_Top_Tenants");
+        const assetType = pick("STEP6_Asset_Type");
+        const industry = pick("STEP7_Industry");
+        const geography = pick("STEP8_Geography");
+        const leaseExpiry = pick("STEP10_Lease_Expiry");
+        const dispositions = pick("STEP11_Dispositions");
+
+        return `
+
+QUARTERLY PRESENTATION WALKTHROUGH (read-only reference model used to verify calculations and mapping):
+- This workbook represents the institutional calculation model and slide mapping steps.
+- Use it to explain *how* each KPI/table is derived and to sanity-check mapping decisions.
+- Do NOT expose file names/paths; only reference sheet names and columns generically.
+Available sheets: ${JSON.stringify(walkthrough.sheetNames)}
+Portfolio_Summary (preview): ${JSON.stringify(summary)}
+STEP5_Top_Tenants (preview): ${JSON.stringify(topTenants)}
+STEP6_Asset_Type (preview): ${JSON.stringify(assetType)}
+STEP7_Industry (preview): ${JSON.stringify(industry)}
+STEP8_Geography (preview): ${JSON.stringify(geography)}
+STEP10_Lease_Expiry (preview): ${JSON.stringify(leaseExpiry)}
+STEP11_Dispositions (preview): ${JSON.stringify(dispositions)}`;
+      })()
+    : "";
+
   const portfolioBlock = portfolioContext
     ? (() => {
         const summary = JSON.stringify(portfolioContext.summary || {}, null, 2);
@@ -55,6 +87,7 @@ Always give clear, step-by-step explanations and tie answers back to specific sh
   return `You are an expert institutional real-estate financial analyst AI for OrionDeck — an AI-powered portfolio reporting platform.
 You are analyzing the Q4 2025 Portfolio Report for Orion Properties Inc., a diversified REIT.
 ${portfolioBlock}
+${walkthroughBlock}
 
 CURRENT LIVE SLIDE DATA (JSON — use for modifications and slide-specific questions):
 ${JSON.stringify(slides, null, 2)}
@@ -69,9 +102,10 @@ YOUR CAPABILITIES:
 2. Explain, in natural conversational language, how the report is generated end-to-end:
    - From raw Excel rows → derived KPIs → slide content → final PPTX.
    - Reference specific sheets, columns, and slide numbers when helpful.
-3. Modify slide content exactly as the user requests (change values, update text, update KPIs).
-4. Add notes to any slide.
-5. Provide strategic insight and commentary as a senior REIT / portfolio analyst (risk, opportunities, credit quality, lease rollover, capital allocation, disposition strategy).
+3. Use the provided conversation history to interpret pronouns and references (e.g., "earlier", "slide 6", "the previous calculation"). Do not contradict the live slide JSON.
+4. Modify slide content exactly as the user requests (change values, update text, update KPIs).
+5. Add notes to any slide.
+6. Provide strategic insight and commentary as a senior REIT / portfolio analyst (risk, opportunities, credit quality, lease rollover, capital allocation, disposition strategy).
 
 MODIFICATION RULES:
 - When a user says "change X to Y" or "update X to Y" or "set X to Y" in slide N, extract:
@@ -117,7 +151,11 @@ OR for adding a note:
 
 -IMPORTANT:
 - thinking steps should be SHORT (5-12 words each), like internal monologue.
-- message should be concise and well-structured markdown: 2–6 short paragraphs and/or a few bullet points. Avoid long walls of text or repeated whitespace.
+- message formatting (user-friendly):
+  - Do NOT use Markdown headings (no lines starting with #, ##, ###).
+  - Do NOT use numbered lists.
+  - Use 2–4 short paragraphs with bold labels.
+  - If you describe transactions, show at most 3 rows in a compact markdown table with columns: Property, SF, Price, Occ%, Strategic Reason.
 - Focus on the specific question the user asked (e.g., \"Explain slide 4\"), not every possible metric at once.
 - Never hallucinate numbers — only use what is in the slide data and portfolio data above, which already embed the full Excel and walkthrough logic. If the user asks for something that is not directly derivable, say so and offer the closest reliable proxy or explain what additional data would be needed.
 - For modifications: always include the modification object even if you mention it in the message.`;
@@ -204,17 +242,26 @@ function applyModification(mod) {
 
 // ─── Main non-streaming entry point ───────────────────────────────────────────
 
-async function processMessage(userMessage) {
+async function processMessage(userMessage, historyMessages = []) {
   const slides = getSlides();
   const context = getPortfolioContext();
   const systemPrompt = buildSystemPrompt(slides, context);
 
   try {
     const client = getOpenAIClient();
+    const historyForModel = (historyMessages || [])
+      .filter((m) => m && typeof m.content === "string" && m.content.trim())
+      .slice(-12)
+      .map((m) => ({
+        role: m.role === "assistant" ? "assistant" : "user",
+        content: m.content,
+      }));
+
     const completion = await client.chat.completions.create({
       model: "gpt-4o",
       messages: [
         { role: "system", content: systemPrompt },
+        ...historyForModel,
         { role: "user", content: userMessage },
       ],
       response_format: { type: "json_object" },

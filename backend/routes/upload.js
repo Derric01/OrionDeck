@@ -36,15 +36,23 @@ const upload = multer({
 
 // Simulate staged thinking process
 function buildThinkingSteps(parsedData) {
+  const summary = parsedData?.summary || {};
+  const sheetCount = parsedData?.raw?.summary ? 4 : 0;
+  const propsCount = parsedData?.properties?.length || 0;
+  const leasesCount = parsedData?.leases?.length || 0;
+  const txCount = parsedData?.transactions?.length || 0;
+  const occ = summary.occupancyPct || "—";
+  const abr = summary.totalABR != null ? `$${(Number(summary.totalABR) / 1e6).toFixed(1)}M` : "—";
+  const walt = summary.waltYears != null ? `${Number(summary.waltYears).toFixed(2)} yrs` : "—";
   return [
     { step: 1, label: "File uploaded successfully", delay: 300 },
-    { step: 2, label: `Parsing Excel — detected ${parsedData?.raw?.summary ? 4 : 0} sheets`, delay: 600 },
+    { step: 2, label: `Parsing Excel — detected ${sheetCount} sheets`, delay: 600 },
     { step: 3, label: `Sheet names: Summary, Properties, Leases, Transactions`, delay: 900 },
-    { step: 4, label: `Properties sheet: ${parsedData?.properties?.length || 61} records loaded`, delay: 1200 },
-    { step: 5, label: `Leases sheet: ${parsedData?.leases?.length || 89} lease records parsed`, delay: 1500 },
-    { step: 6, label: `Transactions sheet: ${parsedData?.transactions?.length || 3} Q4 2025 dispositions`, delay: 1800 },
+    { step: 4, label: `Properties sheet: ${propsCount} records loaded`, delay: 1200 },
+    { step: 5, label: `Leases sheet: ${leasesCount} lease records parsed`, delay: 1500 },
+    { step: 6, label: `Transactions sheet: ${txCount} records loaded`, delay: 1800 },
     { step: 7, label: "Calculating portfolio KPIs from lease roll", delay: 2100 },
-    { step: 8, label: `Occupancy computed: 89.8% | ABR: $145.9M | WALT: 4.27 yrs`, delay: 2400 },
+    { step: 8, label: `KPIs computed: Occupancy ${occ} | ABR ${abr} | WALT ${walt}`, delay: 2400 },
     { step: 9, label: "Mapping KPIs to presentation template (8 slides)", delay: 2700 },
     { step: 10, label: "Generating report slides from Orion template", delay: 3000 },
     { step: 11, label: "Slides rendered and ready for display", delay: 3300 },
@@ -62,7 +70,13 @@ router.post("/", upload.single("excel"), (req, res) => {
     try {
       parsedData = parsePortfolioExcel(req.file.path);
     } catch (parseErr) {
-      console.warn("Excel parse warning:", parseErr.message);
+      console.warn("Excel parse error:", parseErr.message);
+      return res.status(400).json({
+        success: false,
+        error:
+          parseErr.message ||
+          "Failed to parse Excel. Please ensure you are using the Orion_Q4_2025_Raw_Data.xlsx template.",
+      });
     }
 
     // Set context for chat engine (full Excel knowledge for Q&A)

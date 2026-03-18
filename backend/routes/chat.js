@@ -5,7 +5,7 @@ const { getSlides } = require("../utils/slideContent");
 const router = express.Router();
 
 router.post("/", async (req, res) => {
-  const { message } = req.body;
+  const { message, history } = req.body;
 
   if (!message || typeof message !== "string") {
     return res.status(400).json({ error: "message is required" });
@@ -13,7 +13,7 @@ router.post("/", async (req, res) => {
 
   try {
     const context = getPortfolioContext();
-    const response = await processMessage(message);
+    const response = await processMessage(message, Array.isArray(history) ? history : []);
     const slides = response.action ? getSlides() : null;
 
     return res.json({

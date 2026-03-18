@@ -27,6 +27,7 @@ function SlideBlock({ slide }) {
       <div className="slide-content">
         <h3 className="slide-title">{slide.title}</h3>
         <SlideBody slide={slide} />
+        <SourceTables tables={slide.content?.sourceTables} />
         {slide.content?.notes && slide.content.notes.length > 0 && (
           <div className="slide-notes">
             <div className="notes-label">NOTES</div>
@@ -36,6 +37,69 @@ function SlideBlock({ slide }) {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+function SourceTables({ tables }) {
+  if (!tables || !Array.isArray(tables) || tables.length === 0) return null;
+
+  return (
+    <div style={{ marginTop: 14 }}>
+      <div className="metrics-sub-title">Source data (from uploaded Excel)</div>
+      {tables.map((t, idx) => (
+        <details key={idx} style={{ marginTop: 10 }}>
+          <summary style={{ cursor: "pointer" }}>
+            <strong>{t.title || "Source table"}</strong>
+            {t.sheet ? <span> — {t.sheet}</span> : null}
+            {Array.isArray(t.rows) ? <span> ({t.rows.length} rows)</span> : null}
+          </summary>
+          <DataTable rows={t.rows || []} />
+        </details>
+      ))}
+    </div>
+  );
+}
+
+function DataTable({ rows }) {
+  if (!Array.isArray(rows) || rows.length === 0) return <div style={{ marginTop: 8, opacity: 0.8 }}>No rows.</div>;
+
+  const columns = Array.from(
+    rows.reduce((set, r) => {
+      Object.keys(r || {}).forEach((k) => set.add(k));
+      return set;
+    }, new Set())
+  );
+
+  const MAX = 25;
+  const displayRows = rows.slice(0, MAX);
+  const truncated = rows.length > MAX;
+
+  return (
+    <div className="slide-table-wrap" style={{ marginTop: 10 }}>
+      <table className="slide-table">
+        <thead>
+          <tr>
+            {columns.map((c) => (
+              <th key={c}>{c}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {displayRows.map((r, i) => (
+            <tr key={i}>
+              {columns.map((c) => (
+                <td key={c}>{String(r?.[c] ?? "")}</td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {truncated && (
+        <div style={{ marginTop: 6, fontSize: 12, opacity: 0.85 }}>
+          Showing first {MAX} rows. (Upload has {rows.length} total.)
+        </div>
+      )}
     </div>
   );
 }

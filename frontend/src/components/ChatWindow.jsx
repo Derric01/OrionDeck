@@ -95,7 +95,7 @@ function Message({ msg }) {
     <div className={`message ${isAgent ? "agent-message" : "user-message"}`}>
       {isAgent && (
         <div className="agent-avatar">
-          <span>B</span>
+          <img src="/Screenshot 2026-01-24 151951.png" alt="Braind logo" />
         </div>
       )}
       <div className="message-bubble">
