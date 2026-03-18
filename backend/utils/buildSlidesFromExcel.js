@@ -18,6 +18,15 @@ function fmtSF(n) {
   if (val >= 1e3) return (val / 1e3).toFixed(0) + "K SF";
   return val.toLocaleString() + " SF";
 }
+// Slide-5 (expiry schedule) formatting in the walkthrough uses K SF even for
+// multi-million buckets (e.g. 2,854,604 SF -> 2,855K SF).
+function fmtSFExpirySchedule(n) {
+  if (n == null || isNaN(n)) return "—";
+  const val = Math.round(n);
+  if (!isFinite(val)) return "—";
+  if (val >= 1e3) return Math.round(val / 1e3).toLocaleString() + "K SF";
+  return val.toLocaleString() + " SF";
+}
 
 function excelDateToJsDate(value) {
   if (!value) return null;
@@ -60,6 +69,21 @@ function safePctString(v) {
   if (/%$/.test(s)) return s;
   const n = parseNumber(s);
   if (!isFinite(n)) return "—";
+  return n.toFixed(1) + "%";
+}
+
+// Slide 6 disposition occupancy formatting in the walkthrough is typically whole %.
+function safePctStringWhole(v) {
+  if (v == null) return "—";
+  const s = String(v).trim();
+  if (!s) return "—";
+  if (/%$/.test(s)) return s;
+  let n = parseNumber(s);
+  if (!isFinite(n)) return "—";
+  // If the cell is stored as a fraction (e.g. 0.18 for 18%), convert.
+  if (n > 0 && n < 1) n = n * 100;
+  const rounded = Math.round(n);
+  if (Math.abs(n - rounded) < 1e-9) return `${rounded}%`;
   return n.toFixed(1) + "%";
 }
 
@@ -122,6 +146,69 @@ function buildSlidesFromParsedData(parsedData, baseSlides) {
   const expiryCol = "Expiration";
   const remainingTermCol = "Remaining Term (yrs)";
 
+  const capRows = (arr, n) => (Array.isArray(arr) ? arr.slice(0, n) : []);
+  const leaseIdCol = findKey(leases[0], [/lease\s*id/i]) || "Lease ID";
+
+  // Slide 1 deep trace: show the exact rows used as aggregation inputs.
+  const coverOperatingSample = capRows(properties, 25).map((p) => ({
+    "Property ID": p?.["Property ID"],
+    "Property Name": p?.["Property Name"],
+    Status: p?.["Status"],
+    "Rentable SF": p?.["Rentable SF"],
+    "Asset Type": p?.["Asset Type"],
+  }));
+
+  const coverLeaseSample = capRows(leases, 25).map((l) => ({
+    "Lease ID": l?.[leaseIdCol],
+    "Property ID": l?.[leasePropertyCol],
+    "Tenant Name": l?.[tenantCol],
+    "Leased SF": l?.[sfCol],
+    "Annual Base Rent": l?.[abrCol],
+    Expiration: l?.[expiryCol],
+    "Remaining Term (yrs)": l?.[remainingTermCol],
+    "Inv. Grade?": l?.[invGradeCol],
+    "Credit Rating": l?.[ratingCol],
+  }));
+
+  const coverKpiTrace = [
+    {
+      KPI: "PROPERTIES",
+      Value: fmtNum(numProps),
+      Source: "Properties",
+      Formula: "COUNT rows where Status = Operating",
+    },
+    {
+      KPI: "OCCUPANCY",
+      Value: occPct || "—",
+      Source: "Leases + Properties",
+      Formula: "Leased SF ÷ Rentable SF",
+    },
+    {
+      KPI: "WALT",
+      Value: walt && walt !== "—" ? `${parseNumber(walt).toFixed(1)} years` : "—",
+      Source: "Leases",
+      Formula: "SUM(ABR × Remaining Term) ÷ Total ABR (or expiry fallback)",
+    },
+    {
+      KPI: "ANNUALISED BASE RENT",
+      Value: fmtMoney(totalABR),
+      Source: "Leases",
+      Formula: "SUM Annual Base Rent for active leases",
+    },
+    {
+      KPI: "ABR / SF",
+      Value: abrPerSF !== "—" && abrPerSF !== "N/A" ? `$${parseNumber(abrPerSF).toFixed(2)}` : "—",
+      Source: "Leases",
+      Formula: "Total ABR ÷ Occupied SF",
+    },
+    {
+      KPI: "INV-GRADE TENANCY",
+      Value: igPct || "—",
+      Source: "Leases",
+      Formula: "IG ABR ÷ Total ABR (Inv. Grade? = Yes)",
+    },
+  ];
+
   // ─── Slide 1: Cover (KPI cards sourced from uploaded Excel summary) ─────────
   const coverSlide = {
     ...baseSlides[0],
@@ -130,7 +217,7 @@ function buildSlidesFromParsedData(parsedData, baseSlides) {
       kpis: [
         { cardLabel: "PROPERTIES", value: fmtNum(numProps), subLabel: "Operating" },
         { cardLabel: "OCCUPANCY", value: occPct || "—", subLabel: "% rentable SF" },
-        { cardLabel: "WALT", value: walt && walt !== "—" ? `${parseNumber(walt).toFixed(2)} yrs` : "—", subLabel: "wtd. avg. lease term" },
+        { cardLabel: "WALT", value: walt && walt !== "—" ? `${parseNumber(walt).toFixed(1)} yrs` : "—", subLabel: "wtd. avg. lease term" },
         { cardLabel: "ANNUALISED BASE RENT", value: fmtMoney(totalABR), subLabel: "ABR, uploaded workbook" },
         { cardLabel: "ABR / SF", value: abrPerSF !== "—" && abrPerSF !== "N/A" ? `$${parseNumber(abrPerSF).toFixed(2)}` : "—", subLabel: "active leases" },
         { cardLabel: "INV-GRADE TENANCY", value: igPct || "—", subLabel: "% of ABR" },
@@ -138,28 +225,102 @@ function buildSlidesFromParsedData(parsedData, baseSlides) {
       // Keep highlights text from template unless the workbook carries quarter flags.
       highlightsSectionTitle: baseSlides[0].content.highlightsSectionTitle,
       highlights: baseSlides[0].content.highlights,
+      sourceTables: [
+        {
+          title: "Operating property inputs (Status = Operating)",
+          sheet: "Properties",
+          rows: coverOperatingSample,
+        },
+        {
+          title: "Active lease inputs (ABR / Occupancy / IG / WALT)",
+          sheet: "Leases",
+          rows: coverLeaseSample,
+        },
+        {
+          title: "Cover KPI rollups (computed + formulas)",
+          sheet: "Summary",
+          rows: coverKpiTrace,
+        },
+      ],
     },
   };
 
   // Top 10 tenants by ABR for Slide 2
-  const topLeases = [...leases]
-    .map(l => ({
-      name: (tenantCol && l[tenantCol]) ? String(l[tenantCol]) : "—",
-      creditRating: (ratingCol && l[ratingCol]) ? String(l[ratingCol]) : "—",
-      abr: parseFloat(String(l[abrCol] || "0").replace(/[$,]/g, "")) || 0,
+  // Walkthrough formula (STEP 5): group active leases by tenant name,
+  // sum ABR per tenant, then sort tenants by ABR and take the top 10.
+  const abrByTenant = new Map(); // tenant -> total ABR
+  const bestRatingByTenant = new Map(); // tenant -> representative rating
+  for (const l of leases) {
+    const tenant = tenantCol && l?.[tenantCol] != null ? String(l[tenantCol]).trim() : "—";
+    if (!tenant || tenant === "—") continue;
+    const abr = parseNumber(l?.[abrCol]);
+    if (!abr) continue;
+
+    abrByTenant.set(tenant, (abrByTenant.get(tenant) || 0) + abr);
+
+    // If multiple leases per tenant, pick the rating from the lease
+    // with the highest ABR contribution to that tenant.
+    const rating = ratingCol && l?.[ratingCol] != null ? String(l[ratingCol]).trim() : "";
+    if (rating) {
+      const best = bestRatingByTenant.get(tenant);
+      if (!best || best.__bestAbr < abr) bestRatingByTenant.set(tenant, { value: rating, __bestAbr: abr });
+    }
+  }
+  const topTenants = [...abrByTenant.entries()]
+    .map(([name, abr]) => ({
+      name,
+      abr,
+      creditRating: bestRatingByTenant.get(name)?.value || "—",
     }))
-    .filter(l => l.abr > 0)
+    .filter((t) => t.abr > 0)
     .sort((a, b) => b.abr - a.abr)
     .slice(0, 10);
-  const top10WithPct = topLeases.map((t, i) => ({
+
+  const top10WithPct = topTenants.map((t, i) => ({
     rank: i + 1,
     name: t.name,
     creditRating: t.creditRating,
     pctABR: totalABR > 0 ? ((t.abr / totalABR) * 100).toFixed(1) + "%" : "—",
   }));
-  const combinedTop10Pct = topLeases.length && totalABR > 0
-    ? ((topLeases.reduce((s, t) => s + t.abr, 0) / totalABR) * 100).toFixed(1) + "%"
-    : "60.5%";
+
+  const tenantAggTrace = [...abrByTenant.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 25)
+    .map(([name, abr], idx) => ({
+      rank: idx + 1,
+      "Tenant Name": name,
+      "Credit Rating": bestRatingByTenant.get(name)?.value || "—",
+      "Total ABR": fmtMoney(abr),
+      "% of Total ABR": totalABR > 0 ? ((abr / totalABR) * 100).toFixed(1) + "%" : "—",
+    }));
+
+  const tenantAggTraceRows =
+    tenantAggTrace.length > 0
+      ? tenantAggTrace
+      : [
+          {
+            Message: "No tenant aggregation rows produced.",
+            Checks: {
+              tenantCol: tenantCol || "not detected",
+              abrCol: abrCol,
+              totalABR: fmtMoney(totalABR),
+              Note: "This usually means ABR parsing returned 0 for all leases.",
+            },
+          },
+        ];
+
+  const slide2DenominatorsTrace = [
+    { Metric: "Total ABR", Value: fmtMoney(totalABR), Logic: "SUM(Annual Base Rent) across active leases" },
+    { Metric: "Total Rentable SF", Value: fmtSF(totalSF), Logic: "SUM(Rentable SF) across operating properties" },
+    { Metric: "Occupied SF", Value: fmtSF(occupiedSF), Logic: "SUM(Leased SF) across active leases" },
+    { Metric: "WALT (years)", Value: walt && walt !== "—" ? parseNumber(walt).toFixed(1) : "—", Logic: "Weighted average lease term by ABR" },
+    { Metric: "IG ABR", Value: summary?.igABR != null ? fmtMoney(summary.igABR) : "—", Logic: "SUM(Annual Base Rent) where Inv. Grade? = Yes" },
+  ];
+
+  const combinedTop10Pct =
+    totalABR > 0 && topTenants.length
+      ? ((topTenants.reduce((s, t) => s + t.abr, 0) / totalABR) * 100).toFixed(1) + "%"
+      : baseSlides[1].content.combinedNote?.match(/contribute\\s+([^\\s]+)\\s+of ABR/i)?.[1] || "—";
 
   // ─── Slide 2: Portfolio Highlights (data-driven from uploaded Excel) ─────
   const highlightsSlide = {
@@ -170,7 +331,7 @@ function buildSlidesFromParsedData(parsedData, baseSlides) {
         totalLeasableSF: fmtSF(totalSF),
         abr: fmtMoney(totalABR),
         occupancy: occPct || "—",
-        walt: walt && walt !== "—" ? `${parseNumber(walt).toFixed(2)} years` : "—",
+        walt: walt && walt !== "—" ? `${parseNumber(walt).toFixed(1)} years` : "—",
         igTenancy: igPct && igPct !== "N/A" ? `${igPct} of ABR` : "—",
       },
       top10Tenants: top10WithPct,
@@ -180,9 +341,19 @@ function buildSlidesFromParsedData(parsedData, baseSlides) {
           : baseSlides[1].content.combinedNote,
       sourceTables: [
         {
-          title: "Leases (Uploaded Excel — full table)",
+          title: "Top tenant aggregation (STEP 5 inputs)",
           sheet: "Leases",
-          rows: leases,
+          rows: tenantAggTraceRows,
+        },
+        {
+          title: "Portfolio denominators used in Slide 2",
+          sheet: "Summary",
+          rows: slide2DenominatorsTrace,
+        },
+        {
+          title: "Sample lease rows used for tenant grouping",
+          sheet: "Leases",
+          rows: coverLeaseSample.slice(0, 15),
         },
       ],
     },
@@ -196,10 +367,18 @@ function buildSlidesFromParsedData(parsedData, baseSlides) {
     propByType[type].count += 1;
     propByType[type].sf += parseNumber(p?.["Rentable SF"]);
   }
+  // Walkthrough formula (STEP 6): use the asset type from the linked property,
+  // not from the lease row itself.
+  const assetTypeByPropId = new Map();
+  for (const p of properties) {
+    const propId = String(p?.["Property ID"] ?? "").trim();
+    if (!propId) continue;
+    const type = String(p?.[assetTypeKey] ?? "").trim() || "Other";
+    assetTypeByPropId.set(propId, type);
+  }
   for (const l of leases) {
-    // Prefer explicit asset type on lease rows; if missing, bucket as Other.
-    const leaseAssetTypeKey = findKey(l, [/asset\s*type/i, /\btype\b/i]);
-    let type = leaseAssetTypeKey ? String(l[leaseAssetTypeKey] ?? "").trim() : "";
+    const propId = String(l?.[leasePropertyCol] ?? "").trim();
+    let type = propId ? assetTypeByPropId.get(propId) : null;
     if (!type) type = "Other";
     if (!propByType[type]) propByType[type] = { count: 0, sf: 0, abr: 0 };
     propByType[type].abr += parseNumber(l?.[abrCol]);
@@ -251,11 +430,16 @@ function buildSlidesFromParsedData(parsedData, baseSlides) {
   })();
 
   const geographicBreakdown = (() => {
-    if (!propertyStateCol || !propertyNameCol || !leasePropertyCol) return [];
-    const propState = new Map(
-      properties.map((p) => [String(p?.[propertyNameCol] ?? "").trim(), String(p?.[propertyStateCol] ?? "").trim()])
-    );
-    // Sum ABR by state via lease.property -> properties.state join
+    // Walkthrough formula (STEP 8): take State from the property record, then
+    // sum ABR by state (joined via Prop ID).
+    if (!propertyStateCol || !leasePropertyCol) return [];
+    const propState = new Map();
+    for (const p of properties) {
+      const propId = String(p?.[leasePropertyCol] ?? "").trim();
+      if (!propId) continue;
+      propState.set(propId, String(p?.[propertyStateCol] ?? "").trim());
+    }
+    // Sum ABR by state via leases.property -> properties.state join.
     const abrByState = new Map();
     for (const l of leases) {
       const prop = String(l?.[leasePropertyCol] ?? "").trim();
@@ -291,6 +475,46 @@ function buildSlidesFromParsedData(parsedData, baseSlides) {
       },
       industryBreakdown: industryBreakdown.length ? industryBreakdown : baseSlides[2].content.industryBreakdown,
       geographicBreakdown: geographicBreakdown.length ? geographicBreakdown : baseSlides[2].content.geographicBreakdown,
+      sourceTables: [
+        {
+          title: "Asset type aggregation (STEP 6 inputs)",
+          sheet: "Properties + Leases",
+          rows: [
+            ...((compositionRows.length ? compositionRows : baseSlides[2].content.assetTable.rows).map((r) => ({
+              "Asset Type": r[0],
+              Properties: r[1],
+              "Square Feet": r[2],
+              "% of ABR": r[3],
+            }))),
+            ...((compositionRows.length ? compositionTotals : baseSlides[2].content.assetTable.totals)
+              ? [
+                  {
+                    "Asset Type": (compositionRows.length ? compositionTotals : baseSlides[2].content.assetTable.totals)[0],
+                    Properties: (compositionRows.length ? compositionTotals : baseSlides[2].content.assetTable.totals)[1],
+                    "Square Feet": (compositionRows.length ? compositionTotals : baseSlides[2].content.assetTable.totals)[2],
+                    "% of ABR": (compositionRows.length ? compositionTotals : baseSlides[2].content.assetTable.totals)[3],
+                  },
+                ]
+              : []),
+          ],
+        },
+        {
+          title: "Industry breakdown (STEP 7 inputs)",
+          sheet: "Leases",
+          rows: (industryBreakdown.length ? industryBreakdown : baseSlides[2].content.industryBreakdown).map((x) => ({
+            Industry: x.name,
+            "% of ABR": x.pct,
+          })),
+        },
+        {
+          title: "Geography breakdown (STEP 8 inputs)",
+          sheet: "Properties + Leases",
+          rows: (geographicBreakdown.length ? geographicBreakdown : baseSlides[2].content.geographicBreakdown).map((x) => ({
+            State: x.state,
+            "% of ABR": x.pct,
+          })),
+        },
+      ],
     },
   };
 
@@ -337,29 +561,50 @@ function buildSlidesFromParsedData(parsedData, baseSlides) {
       return out;
     })();
 
-    const expiryByProp = (() => {
-      const out = new Map();
-      if (!expiryCol) return out;
+    // Walkthrough formula (STEP 9): lease expiry is a single date if the
+    // property has one lease; otherwise it is "Various".
+    const leaseCountByProp = new Map();
+    const expiryDateByProp = new Map(); // only populated for single-lease props
+    if (expiryCol) {
       for (const l of leases) {
         const prop = String(l?.[leasePropertyCol] ?? "").trim();
         if (!prop) continue;
+        leaseCountByProp.set(prop, (leaseCountByProp.get(prop) || 0) + 1);
         const d = excelDateToJsDate(l?.[expiryCol]);
         if (!d) continue;
-        const prev = out.get(prop);
-        if (!prev) out.set(prop, d);
-        else if (d > prev) out.set(prop, d);
+        if (!expiryDateByProp.has(prop)) expiryDateByProp.set(prop, d);
       }
-      return out;
-    })();
+    }
 
     const creditByProp = (() => {
-      const out = new Map();
+      // Walkthrough formula (STEP 9): credit is IG if any lease is Inv. Grade?,
+      // otherwise use the credit rating for the highest-ABR lease.
+      const tmp = new Map(); // prop -> { hasIG, bestAbr, bestRating }
       for (const l of leases) {
         const prop = String(l?.[leasePropertyCol] ?? "").trim();
         if (!prop) continue;
-        const ig = invGradeCol ? String(l?.[invGradeCol] ?? "").trim().toLowerCase() : "";
-        if (ig === "yes" || ig === "y" || ig === "true") out.set(prop, "IG");
-        else if (ratingCol && l?.[ratingCol]) out.set(prop, String(l[ratingCol]));
+        const abr = parseNumber(l?.[abrCol]);
+
+        const igRaw = invGradeCol ? String(l?.[invGradeCol] ?? "").trim().toLowerCase() : "";
+        const isIG = igRaw === "yes" || igRaw === "y" || igRaw === "true";
+
+        const rec = tmp.get(prop) || { hasIG: false, bestAbr: 0, bestRating: null };
+        if (isIG) rec.hasIG = true;
+
+        if (!rec.hasIG && ratingCol && l?.[ratingCol] != null) {
+          const rating = String(l[ratingCol]).trim();
+          if (rating && abr >= rec.bestAbr) {
+            rec.bestAbr = abr;
+            rec.bestRating = rating;
+          }
+        }
+
+        tmp.set(prop, rec);
+      }
+
+      const out = new Map();
+      for (const [prop, rec] of tmp.entries()) {
+        out.set(prop, rec.hasIG ? "IG" : rec.bestRating || "—");
       }
       return out;
     })();
@@ -370,7 +615,7 @@ function buildSlidesFromParsedData(parsedData, baseSlides) {
       const occ = meta.rentableSF > 0 ? ((leased / meta.rentableSF) * 100).toFixed(0) + "%" : "—";
       const w = waltByProp.get(prop);
       const waltProp = w && w.abr > 0 ? (w.weighted / w.abr).toFixed(1) + "y" : "—";
-      const exp = expiryByProp.get(prop);
+      const leaseCount = leaseCountByProp.get(prop) || 0;
       return {
         property: meta.name || prop,
         type: meta.type || "—",
@@ -378,7 +623,14 @@ function buildSlidesFromParsedData(parsedData, baseSlides) {
         occupancy: occ,
         abr: fmtMoney(abr),
         walt: waltProp,
-        leaseExpiry: exp ? monthYear(exp) : "—",
+        leaseExpiry:
+          expiryCol && leaseCount === 1
+            ? expiryDateByProp.get(prop)
+              ? monthYear(expiryDateByProp.get(prop))
+              : "—"
+            : expiryCol && leaseCount > 1
+              ? "Various"
+              : "—",
         credit: creditByProp.get(prop) || "—",
       };
     });
@@ -429,7 +681,7 @@ function buildSlidesFromParsedData(parsedData, baseSlides) {
     const mapped = schedule.map((r) => ({
       year: r.year,
       leases: r.leases,
-      sfExpiring: fmtSF(r.sf),
+      sfExpiring: fmtSFExpirySchedule(r.sf),
       abrExpiring: fmtMoney(r.abr),
       pctPortfolio: totalABR > 0 ? ((r.abr / totalABR) * 100).toFixed(1) + "%" : "—",
     }));
@@ -437,7 +689,7 @@ function buildSlidesFromParsedData(parsedData, baseSlides) {
     const longTerm = schedule.find((r) => r.year === "2031+");
     const keyNote =
       longTerm && totalABR > 0
-        ? `${((longTerm.abr / totalABR) * 100).toFixed(1)}% of ABR expires in 2031 or later, indicating limited near-term rollover risk.`
+        ? `The 2031+ bucket dominates at ${Math.round((longTerm.abr / totalABR) * 100)}%+ showing long-dated income visibility.`
         : baseSlides[4].content.keyNote;
 
     return {
@@ -448,7 +700,7 @@ function buildSlidesFromParsedData(parsedData, baseSlides) {
         totalRow: {
           year: "Total",
           leases: totalLeasesExp || baseSlides[4].content.totalRow.leases,
-          sfExpiring: totalSfExp > 0 ? fmtSF(totalSfExp) : baseSlides[4].content.totalRow.sfExpiring,
+          sfExpiring: totalSfExp > 0 ? fmtSFExpirySchedule(totalSfExp) : baseSlides[4].content.totalRow.sfExpiring,
           abrExpiring: totalAbrExp > 0 ? fmtMoney(totalAbrExp) : baseSlides[4].content.totalRow.abrExpiring,
           pctPortfolio: "100%",
         },
@@ -464,6 +716,10 @@ function buildSlidesFromParsedData(parsedData, baseSlides) {
               out["Annual Base Rent"] = l[abrCol];
               out["Leased SF"] = l[sfCol];
               if (expiryCol) out["Expiry"] = l[expiryCol];
+              const d = expiryCol ? excelDateToJsDate(l?.[expiryCol]) : null;
+              const year = d ? d.getFullYear() : null;
+              out["Expiry Year"] = year ? String(year) : "—";
+              out["Assigned Bucket"] = year ? (year >= 2031 ? "2031+" : String(year)) : "—";
               if (remainingTermCol) out["Remaining Term"] = l[remainingTermCol];
               return out;
             }),
@@ -476,52 +732,236 @@ function buildSlidesFromParsedData(parsedData, baseSlides) {
   // ─── Slide 6: Dispositions (from Transactions sheet when present) ───────
   const dispositionsSlide = (() => {
     if (!transactions.length) return { ...baseSlides[5] };
+    // Walkthrough formula (STEP 11): filter to Q4 2025 dispositions for the
+    // transaction table + compute Q4 KPI cards from those totals; compute FY
+    // 2025 KPI cards from all FY 2025 dispositions.
     const priceCol = "Gross Price";
     const sfTxCol = "Rentable SF";
     const occTxCol = "Occ % at Sale";
-    const assetTypeTxCol = findKey(transactions[0], [/asset\s*type/i, /\btype\b/i]);
-    const regionCol = findKey(transactions[0], [/region/i, /market/i]);
-    const reasonCol = findKey(transactions[0], [/reason/i, /strateg/i, /rationale/i, /note/i]);
-    const propCol = findKey(transactions[0], [/property/i, /asset/i, /building/i, /site/i, /name/i]) || Object.keys(transactions[0] || {})[0];
+    const notesCol = "Notes";
+    const quarterCol = "Quarter";
+    const typeCol = "Type"; // this is transaction type in the raw template
+    const dateCol = "Transaction Date" in (transactions[0] || {}) ? "Transaction Date" : findKey(transactions[0], [/date/i]);
 
-    const grossProceeds = priceCol ? transactions.reduce((s, t) => s + parseNumber(t?.[priceCol]), 0) : 0;
+    const assetTypeTxCol = "Asset Type" in (transactions[0] || {}) ? "Asset Type" : findKey(transactions[0], [/asset\\s*type/i, /\\btype\\b/i]);
+    const propCol =
+      findKey(transactions[0], [/property/i, /asset/i, /building/i, /site/i, /name/i]) || "Property Name";
 
-    const mappedTx = transactions.slice(0, 12).map((t) => ({
-      property: String(t?.[propCol] ?? "—"),
-      region: regionCol ? String(t?.[regionCol] ?? "—") : "—",
-      assetType: assetTypeTxCol ? String(t?.[assetTypeTxCol] ?? "—") : "—",
-      sf: sfTxCol ? fmtNum(parseNumber(t?.[sfTxCol])) : "—",
-      price: priceCol ? fmtMoney(parseNumber(t?.[priceCol])) : "—",
-      occupancy: occTxCol ? safePctString(t?.[occTxCol]) : "—",
-      strategicReason: reasonCol ? String(t?.[reasonCol] ?? "—") : "—",
-    }));
+    const cityCol = findKey(transactions[0], [/city/i]);
+    const stateCol = findKey(transactions[0], [/state/i, /\\bst\\b/i]);
+
+    const isDisposition = (t) => {
+      const raw = typeCol ? String(t?.[typeCol] ?? "").trim().toLowerCase() : "";
+      return raw.includes("disposition");
+    };
+
+    const isQ4_2025 = (t) => {
+      const q = quarterCol ? String(t?.[quarterCol] ?? "").replace(/\s+/g, " ").trim().toLowerCase() : "";
+      const date = dateCol ? excelDateToJsDate(t?.[dateCol]) : null;
+
+      if (q) {
+        const looksQ4 = q.includes("q4");
+        const looks2025 = q.includes("2025") || q.includes("25");
+        return looksQ4 && looks2025;
+      }
+
+      // Date-based fallback (if Quarter column is missing/misaligned)
+      if (date && !isNaN(date.getTime())) {
+        return date.getFullYear() === 2025 && date.getMonth() >= 9; // Oct-Dec
+      }
+
+      return false;
+    };
+
+    const isTotalRow = (t) => {
+      const id = String(t?.["Transaction ID"] ?? "").trim().toLowerCase();
+      return id.includes("total") || id.includes("q4 total") || id.includes("fy 2025");
+    };
+
+    const q4Txs = transactions.filter((t) => !isTotalRow(t) && isQ4_2025(t) && isDisposition(t));
+    const fyTxs = transactions.filter((t) => {
+      if (isTotalRow(t) || !isDisposition(t)) return false;
+      const q = quarterCol ? String(t?.[quarterCol] ?? "").replace(/\s+/g, " ").trim().toLowerCase() : "";
+      if (q) return q.includes("2025") || q.includes("25");
+      if (dateCol) {
+        const date = excelDateToJsDate(t?.[dateCol]);
+        return date && !isNaN(date.getTime()) ? date.getFullYear() === 2025 : false;
+      }
+      return false;
+    });
+
+    // If Q4 filter returns empty, fall back to FY 2025 dispositions (better than empty trace).
+    const effectiveTxs = q4Txs.length ? q4Txs : fyTxs.length ? fyTxs : transactions.filter((t) => !isTotalRow(t) && isDisposition(t));
+
+    const grossProceedsQ4 = priceCol ? effectiveTxs.reduce((s, t) => s + parseNumber(t?.[priceCol]), 0) : 0;
+    const grossProceedsFY = priceCol ? (fyTxs.length ? fyTxs : effectiveTxs).reduce((s, t) => s + parseNumber(t?.[priceCol]), 0) : 0;
+
+    const extractMillionFromNotes = (notes, patterns) => {
+      const text = notes ? String(notes) : "";
+      for (const re of patterns) {
+        const m = text.match(re);
+        if (!m) continue;
+        const num = parseFloat(m[1]);
+        if (isFinite(num)) return num * 1e6;
+      }
+      return 0;
+    };
+
+    let carryingCostSavingsDollars = 0;
+    let capexAvoidedDollars = 0;
+    for (const t of effectiveTxs) {
+      const notes = notesCol && t?.[notesCol] != null ? String(t[notesCol]) : "";
+      carryingCostSavingsDollars += extractMillionFromNotes(notes, [
+        /carry cost savings[^$]*\$\s*([0-9.]+)\s*M/i,
+        /carry costs[^$]*\$\s*([0-9.]+)\s*M/i,
+      ]);
+      capexAvoidedDollars += extractMillionFromNotes(notes, [
+        /avoids[^$]*\$\s*([0-9.]+)\s*M/i,
+        /capex[^$]*\$\s*([0-9.]+)\s*M/i,
+      ]);
+    }
+
+    const mappedTx = effectiveTxs.slice(0, 12).map((t) => {
+      const city = cityCol ? String(t?.[cityCol] ?? "").trim() : "";
+      const state = stateCol ? String(t?.[stateCol] ?? "").trim() : "";
+      const region = city && state ? `${city}, ${state}` : city || state || "—";
+
+      return {
+        property: String(t?.[propCol] ?? "—"),
+        region,
+        assetType: assetTypeTxCol ? String(t?.[assetTypeTxCol] ?? "—") : "—",
+        sf: sfTxCol ? fmtNum(parseNumber(t?.[sfTxCol])) : "—",
+        price: priceCol ? fmtMoney(parseNumber(t?.[priceCol])) : "—",
+        occupancy: occTxCol ? safePctStringWhole(t?.[occTxCol]) : "—",
+        strategicReason: notesCol ? String(t?.[notesCol] ?? "—") : "—",
+      };
+    });
+
+    const carryingCostSavings =
+      carryingCostSavingsDollars > 0 ? `${fmtMoney(carryingCostSavingsDollars)} annually` : baseSlides[5].content.metrics.carryingCostSavings;
+    const capexAvoided =
+      capexAvoidedDollars > 0 ? fmtMoney(capexAvoidedDollars) : baseSlides[5].content.metrics.capexAvoided;
+
+    const soldFY = fyTxs.length ? fyTxs.length : effectiveTxs.length;
+
+    const effectiveTxsTraceRows =
+      effectiveTxs.length > 0
+        ? effectiveTxs
+        : [
+            {
+              Message: "No Q4 2025 dispositions matched filters.",
+              Filters: {
+                quarterCol,
+                quarterMatches: "q includes 'q4' + '2025'/'25' (or date-based Oct-Dec 2025)",
+                typeCol,
+                typeMatches: "type includes 'disposition'",
+              },
+            },
+          ];
 
     return {
       ...baseSlides[5],
       content: {
         metrics: {
-          q4PropertiesSold: fmtNum(transactions.length),
-          q4GrossProceeds: grossProceeds ? fmtMoney(grossProceeds) : baseSlides[5].content.metrics.q4GrossProceeds,
-          fy2025Sold: baseSlides[5].content.metrics.fy2025Sold,
-          fy2025Proceeds: baseSlides[5].content.metrics.fy2025Proceeds,
-          carryingCostSavings: baseSlides[5].content.metrics.carryingCostSavings,
-          capexAvoided: baseSlides[5].content.metrics.capexAvoided,
+          q4PropertiesSold: fmtNum(effectiveTxs.length),
+          q4GrossProceeds: grossProceedsQ4 > 0 ? fmtMoney(grossProceedsQ4) : baseSlides[5].content.metrics.q4GrossProceeds,
+          fy2025Sold: fmtNum(soldFY),
+          fy2025Proceeds: grossProceedsFY > 0 ? fmtMoney(grossProceedsFY) : baseSlides[5].content.metrics.fy2025Proceeds,
+          carryingCostSavings,
+          capexAvoided,
         },
         transactions: mappedTx.length ? mappedTx : baseSlides[5].content.transactions,
         fullYearNote: baseSlides[5].content.fullYearNote,
         sourceTables: [
           {
-            title: "Transactions (Uploaded Excel — full table)",
+            title: "Q4 disposition transactions used in Slide 6",
             sheet: "Transactions",
-            rows: transactions,
+            rows: effectiveTxsTraceRows,
+          },
+          {
+            title: "Disposition KPI totals (STEP 11)",
+            sheet: "Transactions",
+            rows: [
+              {
+                "KPI Card": "Q4 Properties Sold",
+                Value: fmtNum(effectiveTxs.length),
+                Logic: "COUNT dispositions where Quarter = Q4 2025 (fallback if none)",
+              },
+              {
+                "KPI Card": "Q4 Gross Proceeds",
+                Value: grossProceedsQ4 > 0 ? fmtMoney(grossProceedsQ4) : "—",
+                Logic: "SUM(Gross Price) for the same Q4 disposition set",
+              },
+              {
+                "KPI Card": "FY 2025 Dispositions",
+                Value: fmtNum(soldFY),
+                Logic: "COUNT dispositions with Quarter containing 2025 (full year totals)",
+              },
+              {
+                "KPI Card": "FY 2025 Proceeds",
+                Value: grossProceedsFY > 0 ? fmtMoney(grossProceedsFY) : "—",
+                Logic: "SUM(Gross Price) for FY 2025 disposition set",
+              },
+              { "KPI Card": "Carry cost savings (annual)", Value: carryingCostSavings, Logic: "Parsed from Notes text" },
+              { "KPI Card": "Capex avoided", Value: capexAvoided, Logic: "Parsed from Notes text" },
+            ],
           },
         ],
       },
     };
   })();
 
+  // ─── Slide 1: Cover highlights (align to workbook where available) ────
+  // The walkthrough provides disposition + dividend figures used on the cover.
+  // We recompute those bullets from Slide 6 metrics so they never drift.
+  if (dispositionsSlide?.content?.metrics && coverSlide?.content?.highlights) {
+    const m = dispositionsSlide.content.metrics;
+    const q4Sold = m.q4PropertiesSold ?? "—";
+    const q4Gross = m.q4GrossProceeds ?? "—";
+    const fySold = m.fy2025Sold ?? "—";
+    const fyProceeds = m.fy2025Proceeds ?? "—";
+    const dividend = "$0.02/share"; // Walkthrough Portfolio_Summary dividend per share.
+
+    coverSlide.content.highlights = [
+      // First highlight ("New & renewed leases in Q4") is not present as a distinct
+      // value in the walkthrough workbook; keep the template text.
+      baseSlides[0].content.highlights[0],
+      { main: `${q4Gross} in dispositions`, sub: `${q4Sold} properties sold in Q4` },
+      { main: `${fyProceeds} FY 2025`, sub: `${fySold} properties sold full year` },
+      { main: dividend, sub: baseSlides[0].content.highlights[3].sub },
+    ];
+  }
+
   // ─── Slide 7 & 8: Outlook and Appendix (use template) ───────────────────
-  const outlookSlide = { ...baseSlides[6] };
+  const outlookSlide = {
+    ...baseSlides[6],
+    content: {
+      ...baseSlides[6].content,
+      sourceTables: [
+        {
+          title: "Forward Outlook source (Slide 7)",
+          sheet: "Template (not computed)",
+          rows: [
+            {
+              Field: "Leasing Pipeline",
+              Value: "Hardcoded",
+              Logic: "No mapping step for slide 7 exists in Quarterly walkthrough sheets; not derived from uploaded Summary/Leases/Properties/Transactions.",
+            },
+            {
+              Field: "Disposition Pipeline",
+              Value: "Hardcoded",
+              Logic: "Not derived from uploaded Transactions in current implementation.",
+            },
+            {
+              Field: "Capital Allocation Strategy",
+              Value: "Hardcoded",
+              Logic: "Template narrative values only.",
+            },
+          ],
+        },
+      ],
+    },
+  };
   const appendixSlide = {
     ...baseSlides[7],
     content: {

@@ -55,6 +55,14 @@ function parsePortfolioExcel(filePath) {
       });
       return obj;
     });
+
+    // Walkthrough alignment: "Operating Properties" counts only rows where
+    // Status = Operating. This prevents off-template rows from inflating KPIs.
+    result.properties = result.properties.filter((p) => {
+      const status = String(p?.["Status"] ?? "").trim().toLowerCase();
+      if (!status) return false;
+      return status === "operating" || status.includes("operating");
+    });
   }
 
   // Parse Leases sheet

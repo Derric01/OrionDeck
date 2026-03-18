@@ -2,7 +2,7 @@ import { useState, useCallback } from "react";
 import ChatWindow from "./components/ChatWindow";
 import ChatInput from "./components/ChatInput";
 import ThinkingPanel from "./components/ThinkingPanel";
-import { uploadExcel, generateReport, sendChat } from "./api/client";
+import { uploadExcel, generateReport, sendChatStream } from "./api/client";
 import "./App.css";
 
 let msgIdCounter = 0;
@@ -68,8 +68,8 @@ export default function App() {
     const typingId = newId();
     setMessages((prev) => [...prev, { id: typingId, role: "agent", isTyping: true }]);
 
-    // Reset thinking; backend returns full list of steps
-    setThinkingSteps([]);
+    // Start thinking immediately while backend streams it in real time.
+    setThinkingSteps([{ step: 1, label: "Analyzing your request", delay: 0 }]);
     setIsThinking(true);
 
     try {
@@ -88,23 +88,38 @@ export default function App() {
       // Remove current message from history; chatEngine will append it again as the new user prompt.
       const historyWithoutCurrent = history.slice(0, -1);
 
-      const res = await sendChat(text, historyWithoutCurrent);
+      const upsertThinkingStep = ({ step, label }) => {
+        if (!step || !label) return;
+        setThinkingSteps((prev) => {
+          const next = [...prev];
+          const idx = next.findIndex((p) => p.step === step);
+          if (idx >= 0) next[idx] = { ...next[idx], label };
+          else next.push({ step, label, delay: 0 });
+          next.sort((a, b) => a.step - b.step);
+          return next;
+        });
+      };
 
-      const thinkSteps = (res.thinking || []).map((label, i) => ({
-        step: i + 1,
-        label,
-        delay: 0,
-      }));
-      setThinkingSteps(thinkSteps);
-      setIsThinking(false);
+      await sendChatStream(text, historyWithoutCurrent, {
+        onThinkingStep: (payload) => upsertThinkingStep(payload),
+        onFinal: (res) => {
+          const updatedSlides = res.slides || null;
+          if (updatedSlides) setReportSlides(updatedSlides);
 
-      const updatedSlides = res.slides || null;
-      if (updatedSlides) setReportSlides(updatedSlides);
+          const thinkSteps = (res.thinking || []).map((label, i) => ({
+            step: i + 1,
+            label,
+            delay: 0,
+          }));
+          setThinkingSteps(thinkSteps);
+          setIsThinking(false);
 
-      replaceTyping(typingId, res.message, {
-        thinking: res.thinking || [],
-        slides: updatedSlides,
-        action: res.action || null,
+          replaceTyping(typingId, res.message, {
+            thinking: res.thinking || [],
+            slides: updatedSlides,
+            action: res.action || null,
+          });
+        },
       });
     } catch (err) {
       setIsThinking(false);
